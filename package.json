@@ -1,17 +1,18 @@
 {
   "name": "order",
   "version": "1.0.0",
-  "description": "",
+  "description": "Discord bot for taking orders with slash commands, dropdowns, and buttons.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "author": "Blob",
+  "license": "MIT",
   "dependencies": {
     "discord.js": "^14.25.1",
-    "dotenv": "^17.2.3"
+    "dotenv": "^16.6.1"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
