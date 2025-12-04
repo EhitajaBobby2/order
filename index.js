@@ -1,123 +1,125 @@
 require("dotenv").config();
-const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events, REST, Routes, SlashCommandBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, ActionRowBuilder, StringSelectMenuBuilder, SlashCommandBuilder, Routes } = require("discord.js");
+const { REST } = require("@discordjs/rest");
+const express = require("express");
 
 const client = new Client({
     intents: [GatewayIntentBits.Guilds],
-    partials: [Partials.Channel],
+    partials: [Partials.Channel]
 });
 
 const TOKEN = process.env.TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID; // Your bot's client ID
-const GUILD_ID = process.env.GUILD_ID;   // Your testing server ID
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
 
-// Register the /order slash command
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+// Register slash command
 const commands = [
     new SlashCommandBuilder()
         .setName("order")
-        .setDescription("Start a new order")
-].map(command => command.toJSON());
-
-const rest = new REST({ version: "10" }).setToken(TOKEN);
+        .setDescription("Place an order")
+        .toJSON()
+];
 
 (async () => {
     try {
         console.log("Registering slash commands...");
-        await rest.put(
-            Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-            { body: commands }
-        );
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
         console.log("Slash command /order registered.");
-    } catch (error) {
-        console.error(error);
+    } catch (err) {
+        console.error(err);
     }
 })();
 
-client.on(Events.ClientReady, () => {
+client.once("clientReady", () => {
     console.log(`${client.user.tag} is online!`);
 });
 
-client.on(Events.InteractionCreate, async interaction => {
+client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== "order") return;
 
-    const user = interaction.user;
+    const itemMenu = new StringSelectMenuBuilder()
+        .setCustomId("select_item")
+        .setPlaceholder("Choose an item")
+        .addOptions([
+            { label: "Decorations", value: "Decorations" },
+            { label: "Server Boosts", value: "Server Boosts" },
+            { label: "Aged DC Accounts", value: "Aged DC Accounts" },
+            { label: "Fortnite Accounts", value: "Fortnite Accounts" },
+            { label: "Valorant Accounts", value: "Valorant Accounts" },
+            { label: "Nitros", value: "Nitros" },
+            { label: "Other", value: "Other" }
+        ]);
 
-    // Step 1: Item selection with buttons
-    const itemsRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("decos").setLabel("decos").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("ged_accs").setLabel("@ged accs").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("srvr_bst").setLabel("srvr bst").setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId("other").setLabel("other").setStyle(ButtonStyle.Primary)
-    );
+    const row = new ActionRowBuilder().addComponents(itemMenu);
 
-    await interaction.reply({ content: "What would you like to purchase?", components: [itemsRow], ephemeral: true });
+    await interaction.reply({ content: "What would you like to purchase?", components: [row], ephemeral: true });
 
-    const filter = i => i.user.id === user.id;
-
-    const collector = interaction.channel.createMessageComponentCollector({ filter, time: 10 * 60 * 1000 }); // 10 min
-
-    let order = {
-        item: null,
-        payment: null,
-        quantity: null
-    };
-
-    collector.on("collect", async i => {
-        if (!i.isButton()) return;
-
-        // Step 1 selected
-        if (!order.item) {
-            order.item = i.customId === "ged_accs" ? "@ged accs" : i.customId.replace("_", " ");
-            await i.update({ content: `Selected **${order.item}**. Now choose your payment method.`, components: [] });
-
-            // Step 2: Ask for payment via message
-            await interaction.followUp({ content: "What payment method will you use? (Paypal or Litecoin)", ephemeral: true });
-        }
+    const collector = interaction.channel.createMessageComponentCollector({
+        filter: i => i.user.id === interaction.user.id,
+        time: 600_000
     });
 
-    const messageFilter = m => m.author.id === user.id;
+    let order = { item: null, payment: null, quantity: null };
 
-    const paymentCollector = interaction.channel.createMessageCollector({ filter: messageFilter, time: 10 * 60 * 1000 });
-    paymentCollector.on("collect", async m => {
-        if (!order.payment) {
-            const payment = m.content.toLowerCase();
-            if (payment !== "paypal" && payment !== "litecoin") {
-                m.reply("Invalid payment method. Please type **Paypal** or **Litecoin**.");
-                return;
-            }
-            order.payment = payment;
-            m.reply("Got it! How many would you like to purchase?");
-        } else if (!order.quantity) {
-            const quantity = parseInt(m.content);
-            if (isNaN(quantity) || quantity <= 0) {
-                m.reply("Please enter a valid quantity number.");
-                return;
-            }
-            order.quantity = quantity;
+    collector.on("collect", async i => {
+        if (i.customId === "select_item" && !order.item) {
+            order.item = i.values[0];
 
-            const ownerRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
-            if (!ownerRole) return m.reply("Could not find a role named **Owner** to ping.");
+            const paymentMenu = new StringSelectMenuBuilder()
+                .setCustomId("select_payment")
+                .setPlaceholder("Choose payment method")
+                .addOptions([
+                    { label: "Paypal", value: "Paypal" },
+                    { label: "Litecoin", value: "Litecoin" }
+                ]);
 
-            m.reply({
-                content:
-                    `📦 **New Order Received!**\n` +
-                    `**Item:** ${order.item}\n` +
-                    `**Payment:** ${order.payment}\n` +
-                    `**Quantity:** ${order.quantity}\n` +
-                    `${ownerRole}`,
-                allowedMentions: { roles: [ownerRole.id] }
+            await i.update({ content: `Selected **${order.item}**. Now choose your payment method:`, components: [new ActionRowBuilder().addComponents(paymentMenu)] });
+        } else if (i.customId === "select_payment" && !order.payment) {
+            order.payment = i.values[0];
+
+            const quantityMenu = new StringSelectMenuBuilder()
+                .setCustomId("select_quantity")
+                .setPlaceholder("Choose quantity range")
+                .addOptions([
+                    { label: "1-5", value: "1-5" },
+                    { label: "5-10", value: "5-10" },
+                    { label: "10-15", value: "10-15" },
+                    { label: "15-20", value: "15-20" },
+                    { label: "20-30", value: "20-30" },
+                    { label: "30+", value: "30+" }
+                ]);
+
+            await i.update({ content: `Selected **${order.payment}**. Now choose quantity:`, components: [new ActionRowBuilder().addComponents(quantityMenu)] });
+        } else if (i.customId === "select_quantity" && !order.quantity) {
+            order.quantity = i.values[0];
+
+            const ownerRole = i.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
+
+            await i.update({
+                content: `📦 **New Order Received!**\n**Item:** ${order.item}\n**Payment:** ${order.payment}\n**Quantity:** ${order.quantity}\n${ownerRole ? `<@&${ownerRole.id}>` : "Owner role not found."}`,
+                components: []
             });
 
-            paymentCollector.stop();
             collector.stop();
         }
     });
 
     collector.on("end", collected => {
-        if (!order.quantity) {
-            interaction.followUp({ content: "Order timed out or incomplete.", ephemeral: true });
+        if (!order.item || !order.payment || !order.quantity) {
+            interaction.editReply({ content: "Order cancelled due to timeout.", components: [] });
         }
     });
 });
 
 client.login(TOKEN);
+
+// --- Express server for Render ---
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => res.send("Bot is running!"));
+
+app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
