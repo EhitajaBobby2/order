@@ -1,44 +1,54 @@
 require("dotenv").config();
-const { Client, GatewayIntentBits, Partials, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, Events, REST, Routes, SlashCommandBuilder } = require("discord.js");
+const { 
+  Client, 
+  GatewayIntentBits, 
+  Partials, 
+  REST, 
+  Routes, 
+  SlashCommandBuilder, 
+  ActionRowBuilder, 
+  StringSelectMenuBuilder 
+} = require("discord.js");
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [GatewayIntentBits.Guilds],
   partials: [Partials.Channel]
 });
 
-const token = process.env.TOKEN;
+const commands = [
+  new SlashCommandBuilder()
+    .setName("order")
+    .setDescription("Place a new order")
+].map(cmd => cmd.toJSON());
 
-client.once(Events.ClientReady, async () => {
-  console.log(`${client.user.tag} is online!`);
+const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  // Register slash command
-  const commands = [
-    new SlashCommandBuilder()
-      .setName("order")
-      .setDescription("Start an order process")
-      .toJSON()
-  ];
-
-  const rest = new REST({ version: "10" }).setToken(token);
+(async () => {
   try {
     console.log("Registering slash commands...");
     await rest.put(
-      Routes.applicationCommands(client.user.id),
+      Routes.applicationCommands(process.env.CLIENT_ID),
       { body: commands }
     );
     console.log("Slash command /order registered.");
   } catch (error) {
     console.error(error);
   }
+})();
+
+client.on("clientReady", () => {
+  console.log(`${client.user.tag} is online!`);
 });
 
-client.on(Events.InteractionCreate, async interaction => {
+client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   if (interaction.commandName === "order") {
-    // Step 1: Choose item
-    const itemMenu = new StringSelectMenuBuilder()
+
+    // Step 1: Purchasable items dropdown
+    const itemsMenu = new StringSelectMenuBuilder()
       .setCustomId("selectItem")
-      .setPlaceholder("Select an item")
+      .setPlaceholder("Select an item to purchase")
       .addOptions([
         { label: "Decorations", value: "Decorations" },
         { label: "Server Boosts", value: "Server Boosts" },
@@ -49,34 +59,38 @@ client.on(Events.InteractionCreate, async interaction => {
         { label: "Other", value: "Other" }
       ]);
 
-    const row = new ActionRowBuilder().addComponents(itemMenu);
-
-    await interaction.reply({ content: "What would you like to purchase?", components: [row], ephemeral: true });
+    await interaction.reply({ 
+      content: "What would you like to purchase?", 
+      components: [new ActionRowBuilder().addComponents(itemsMenu)],
+      ephemeral: true
+    });
 
     const filter = i => i.user.id === interaction.user.id;
-    const collector = interaction.channel.createMessageComponentCollector({ filter, time: 600000 });
 
-    let selectedItem = "";
-    let selectedPayment = "";
-    let selectedQuantity = "";
+    // Step 1 Collector: Item
+    const itemCollector = interaction.channel.createMessageComponentCollector({ filter, componentType: 3, time: 600000, max: 1 });
+    itemCollector.on("collect", async itemInteraction => {
+      const selectedItem = itemInteraction.values[0];
 
-    collector.on("collect", async i => {
-      if (i.customId === "selectItem") {
-        selectedItem = i.values[0];
+      // Step 2: Payment method
+      const paymentMenu = new StringSelectMenuBuilder()
+        .setCustomId("selectPayment")
+        .setPlaceholder("Select payment method")
+        .addOptions([
+          { label: "Paypal", value: "Paypal" },
+          { label: "Litecoin", value: "Litecoin" }
+        ]);
 
-        // Step 2: Payment method buttons
-        const paymentRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId("Paypal").setLabel("Paypal").setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId("Litecoin").setLabel("Litecoin").setStyle(ButtonStyle.Secondary)
-        );
+      await itemInteraction.update({ 
+        content: `Selected **${selectedItem}**. Now choose your payment method.`, 
+        components: [new ActionRowBuilder().addComponents(paymentMenu)] 
+      });
 
-        await i.update({ content: `Selected **${selectedItem}**. Now choose your payment method.`, components: [paymentRow] });
-      }
+      const paymentCollector = interaction.channel.createMessageComponentCollector({ filter, componentType: 3, time: 600000, max: 1 });
+      paymentCollector.on("collect", async paymentInteraction => {
+        const selectedPayment = paymentInteraction.values[0];
 
-      if (i.isButton()) {
-        selectedPayment = i.customId;
-
-        // Step 3: Quantity selection
+        // Step 3: Quantity
         const quantityMenu = new StringSelectMenuBuilder()
           .setCustomId("selectQuantity")
           .setPlaceholder("Select quantity")
@@ -89,29 +103,38 @@ client.on(Events.InteractionCreate, async interaction => {
             { label: "30+", value: "30+" }
           ]);
 
-        const quantityRow = new ActionRowBuilder().addComponents(quantityMenu);
-        await i.update({ content: `Payment method **${selectedPayment}** selected. Choose quantity:`, components: [quantityRow] });
-      }
-
-      if (i.customId === "selectQuantity") {
-        selectedQuantity = i.values[0];
-        collector.stop();
-
-        const ownerRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
-
-        await i.update({
-          content: `📦 **New Order Received!**\n**Item:** ${selectedItem}\n**Payment:** ${selectedPayment}\n**Quantity:** ${selectedQuantity}\n${ownerRole ? `<@&${ownerRole.id}>` : ""}`,
-          components: []
+        await paymentInteraction.update({ 
+          content: `Selected **${selectedPayment}**. Now choose quantity.`, 
+          components: [new ActionRowBuilder().addComponents(quantityMenu)] 
         });
-      }
-    });
 
-    collector.on("end", collected => {
-      if (!selectedQuantity) {
-        interaction.followUp({ content: "Order cancelled: timeout.", ephemeral: true });
-      }
+        const quantityCollector = interaction.channel.createMessageComponentCollector({ filter, componentType: 3, time: 600000, max: 1 });
+        quantityCollector.on("collect", async quantityInteraction => {
+          const selectedQuantity = quantityInteraction.values[0];
+
+          await quantityInteraction.update({ 
+            content: `✅ Order received!\n**Item:** ${selectedItem}\n**Payment:** ${selectedPayment}\n**Quantity:** ${selectedQuantity}`,
+            components: []
+          });
+
+          // Step 4: Ping Owner role publicly
+          const ownerRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
+          if (ownerRole) {
+            await interaction.channel.send(`📦 **New Order Received!**
+**User:** ${interaction.user}
+**Item:** ${selectedItem}
+**Payment:** ${selectedPayment}
+**Quantity:** ${selectedQuantity}
+<@&${ownerRole.id}>`);
+          } else {
+            await interaction.channel.send("Could not find the Owner role to ping.");
+          }
+        });
+
+      });
+
     });
   }
 });
 
-client.login(token);
+client.login(process.env.TOKEN);
