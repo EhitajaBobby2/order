@@ -1,0 +1,66 @@
+require("dotenv").config();
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ],
+    partials: [Partials.Channel]
+});
+
+client.once("ready", () => {
+    console.log(`${client.user.tag} is online!`);
+});
+
+client.on("messageCreate", async (message) => {
+    if (message.author.bot) return;
+    if (message.content !== ",order") return;
+
+    const filter = (m) => m.author.id === message.author.id;
+
+    // Step 1 — Ask for the item
+    await message.reply(
+        "What would you like to purchase?\nOptions: **decos, @ged accs, srvr bst, other**"
+    );
+
+    const item = (await message.channel.awaitMessages({ filter, max: 1, time: 60000 }))
+        .first()?.content;
+
+    if (!item) return message.reply("Order cancelled: no response.");
+
+    // Step 2 — Ask for payment method
+    await message.reply("What payment method will you use? (**Paypal** or **Litecoin**)");
+
+    const payment = (await message.channel.awaitMessages({ filter, max: 1, time: 60000 }))
+        .first()?.content;
+
+    if (!payment) return message.reply("Order cancelled: no response.");
+
+    // Step 3 — Ask for quantity
+    await message.reply("How many would you like to purchase?");
+
+    const quantity = (await message.channel.awaitMessages({ filter, max: 1, time: 60000 }))
+        .first()?.content;
+
+    if (!quantity) return message.reply("Order cancelled: no response.");
+
+    // Step 4 — Ping the owner role
+    const ownerRole = message.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
+
+    if (!ownerRole) {
+        return message.reply("Could not find a role named **Owner** to ping.");
+    }
+
+    message.channel.send(
+        `📦 **New Order Received!**\n` +
+        `**Item:** ${item}\n` +
+        `**Payment:** ${payment}\n` +
+        `**Quantity:** ${quantity}\n` +
+        `${ownerRole}`
+    );
+});
+
+client.login(process.env.TOKEN);
