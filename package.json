@@ -1,7 +1,6 @@
 {
-  "name": "order",
+  "name": "discord-order-bot",
   "version": "1.0.0",
-  "description": "Discord order bot with slash commands and dropdowns",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
