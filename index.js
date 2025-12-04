@@ -1,113 +1,111 @@
 require("dotenv").config();
-const { Client, GatewayIntentBits, Partials, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, Events } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMembers
     ],
     partials: [Partials.Channel]
 });
 
-const validPayments = ["Paypal", "Litecoin"];
+const commands = [
+    new SlashCommandBuilder()
+        .setName('order')
+        .setDescription('Start an order workflow')
+        .toJSON()
+];
 
-client.once("ready", async () => {
+const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+
+(async () => {
+    try {
+        console.log('Registering slash commands...');
+        await rest.put(
+            Routes.applicationCommands(process.env.CLIENT_ID),
+            { body: commands }
+        );
+        console.log('Slash commands registered!');
+    } catch (err) {
+        console.error(err);
+    }
+})();
+
+client.once("ready", () => {
     console.log(`${client.user.tag} is online!`);
-
-    const guild = client.guilds.cache.first();
-    if (!guild) return console.log("Bot is not in a guild yet.");
-
-    await guild.commands.create({
-        name: "order",
-        description: "Start a purchase order"
-    });
-
-    console.log("Slash command /order registered.");
 });
 
-client.on(Events.InteractionCreate, async (interaction) => {
+client.on("interactionCreate", async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== "order") return;
+    if (interaction.commandName === 'order') {
+        const timeout = 600000; // 10 minutes
 
-    const ownerRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
-    if (!ownerRole) return interaction.reply("Could not find a role named **Owner**.");
+        // Step 1 — Ask for the item
+        await interaction.reply({
+            content: "What would you like to purchase?\nOptions: **decos, @ged accs, srvr bst, other**",
+            ephemeral: true
+        });
 
-    const itemRow = new ActionRowBuilder()
-        .addComponents(
-            new StringSelectMenuBuilder()
-                .setCustomId("select_item")
-                .setPlaceholder("Select an item to purchase")
-                .addOptions([
-                    { label: "Decos", value: "decos" },
-                    { label: "@ged accs", value: "@ged accs" },
-                    { label: "Srvr bst", value: "srvr bst" },
-                    { label: "Other", value: "other" }
-                ])
-        );
+        const filter = i => i.user.id === interaction.user.id && i.isChatInputCommand() === false;
 
-    await interaction.reply({ content: "What would you like to purchase?", components: [itemRow], ephemeral: true });
+        const messageCollector = interaction.channel.createMessageCollector({ filter, time: timeout, max: 1 });
 
-    const collector = interaction.channel.createMessageComponentCollector({ componentType: 3, time: 600000 });
+        messageCollector.on('collect', async msg => {
+            const item = msg.content;
 
-    let order = { item: null, payment: null, quantity: null };
-
-    collector.on("collect", async i => {
-        if (i.user.id !== interaction.user.id) return i.reply({ content: "This is not your order!", ephemeral: true });
-
-        if (i.customId === "select_item") {
-            order.item = i.values[0];
-
-            const paymentRow = new ActionRowBuilder()
-                .addComponents(
-                    new StringSelectMenuBuilder()
-                        .setCustomId("select_payment")
-                        .setPlaceholder("Select a payment method")
-                        .addOptions(validPayments.map(p => ({ label: p, value: p.toLowerCase() })))
-                );
-
-            await i.update({ content: `Selected **${order.item}**. Now choose your payment method.`, components: [paymentRow] });
-        } else if (i.customId === "select_payment") {
-            order.payment = i.values[0];
-
-            const quantityRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder().setCustomId("qty_1").setLabel("1").setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId("qty_2").setLabel("2").setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId("qty_3").setLabel("3").setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId("qty_other").setLabel("Other").setStyle(ButtonStyle.Secondary)
-                );
-
-            await i.update({ content: `Payment method: **${order.payment}**. Choose quantity:`, components: [quantityRow] });
-        } else if (i.customId.startsWith("qty_")) {
-            if (i.customId === "qty_other") {
-                await i.reply({ content: "Please type your quantity now.", ephemeral: true });
-
-                const msgFilter = m => m.author.id === interaction.user.id;
-                const collected = await interaction.channel.awaitMessages({ filter: msgFilter, max: 1, time: 600000, errors: ['time'] });
-                order.quantity = collected.first().content;
-            } else {
-                order.quantity = i.customId.split("_")[1];
-            }
-
-            await i.update({ content: `✅ Order complete!`, components: [] });
-
-            interaction.channel.send(
-                `📦 **New Order Received!**\n` +
-                `**Item:** ${order.item}\n` +
-                `**Payment:** ${order.payment}\n` +
-                `**Quantity:** ${order.quantity}\n` +
-                `**Notifying:** ${ownerRole.toString()}`
+            // Step 2 — Ask for payment with buttons
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('paypal')
+                    .setLabel('Paypal')
+                    .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                    .setCustomId('litecoin')
+                    .setLabel('Litecoin')
+                    .setStyle(ButtonStyle.Primary)
             );
 
-            collector.stop();
-        }
-    });
+            const paymentMessage = await interaction.followUp({ content: "What payment method will you use?", components: [row], ephemeral: true });
 
-    collector.on("end", collected => {
-        if (!order.item || !order.payment || !order.quantity) {
-            interaction.editReply({ content: "Order cancelled due to timeout or incomplete selection.", components: [] });
-        }
-    });
+            const buttonFilter = i => i.user.id === interaction.user.id;
+            try {
+                const buttonInteraction = await paymentMessage.awaitMessageComponent({ filter: buttonFilter, time: timeout });
+                const payment = buttonInteraction.customId;
+                await buttonInteraction.update({ content: `You selected: **${payment}**`, components: [] });
+
+                // Step 3 — Ask for quantity
+                const quantityMsg = await interaction.followUp({ content: "How many would you like to purchase?", ephemeral: true });
+                const quantityCollector = interaction.channel.createMessageCollector({ filter, time: timeout, max: 1 });
+
+                quantityCollector.on('collect', async qtyMsg => {
+                    const quantity = qtyMsg.content;
+
+                    // Step 4 — Ping the owner role
+                    const ownerRole = interaction.guild.roles.cache.find(r => r.name.toLowerCase() === "owner");
+                    if (!ownerRole) return interaction.followUp({ content: "Could not find a role named **Owner** to ping.", ephemeral: true });
+
+                    await interaction.followUp({
+                        content: `📦 **New Order Received!**\n**Item:** ${item}\n**Payment:** ${payment}\n**Quantity:** ${quantity}\n${ownerRole}`
+                    });
+                });
+
+                quantityCollector.on('end', collected => {
+                    if (collected.size === 0) {
+                        interaction.followUp({ content: "Order cancelled: no quantity provided.", ephemeral: true });
+                    }
+                });
+
+            } catch (err) {
+                return interaction.followUp({ content: "Order cancelled: no payment method selected in time.", ephemeral: true });
+            }
+        });
+
+        messageCollector.on('end', collected => {
+            if (collected.size === 0) {
+                interaction.followUp({ content: "Order cancelled: no item selected.", ephemeral: true });
+            }
+        });
+    }
 });
 
 client.login(process.env.TOKEN);
